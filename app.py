@@ -44,6 +44,10 @@ def free_resources(sidekick):
         print(f"Exception during cleanup: {e}")
 
 
+import os
+
+PORT = int(os.environ.get("PORT", 7860))
+
 with gr.Blocks(title="Sidekick", theme=gr.themes.Default(primary_hue="emerald")) as ui:
     gr.Markdown("## Sidekick Personal Co-Worker")
     sidekick = gr.State(delete_callback=free_resources)
@@ -74,4 +78,6 @@ with gr.Blocks(title="Sidekick", theme=gr.themes.Default(primary_hue="emerald"))
     reset_button.click(reset, [], [message, success_criteria, chatbot, sidekick])
 
 
-ui.launch(inbrowser=True)
+# Bind to 0.0.0.0 so hosting platforms can detect the service.
+# Use the PORT env var when provided (e.g., Render/Heroku/GCP).
+ui.launch(server_name="0.0.0.0", server_port=PORT, inbrowser=False)
