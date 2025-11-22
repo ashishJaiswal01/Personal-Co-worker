@@ -1,0 +1,23 @@
+[project]
+name = "sidekick"
+version = "0.1.0"
+description = "Sidekick Personal Co-Worker"
+requires-python = ">=3.10"
+dependencies = [
+    "gradio",
+    "langchain",
+    "langchain-openai",
+    "langchain-community",
+    "langchain-experimental",
+    "langgraph",
+    "playwright",
+    "python-dotenv",
+    "pydantic",
+    "typing-extensions",
+    "requests",
+    "beautifulsoup4",
+    "wikipedia",
+]
+
+[tool.uv]
+index-url = "https://pypi.org/simple"

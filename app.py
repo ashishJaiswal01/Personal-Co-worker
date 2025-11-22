@@ -3,20 +3,36 @@ from sidekick import Sidekick
 
 
 async def setup():
-    sidekick = Sidekick()
-    await sidekick.setup()
-    return sidekick
+    try:
+        sidekick = Sidekick()
+        await sidekick.setup()
+        return sidekick
+    except Exception as e:
+        print(f"Error during setup: {e}")
+        return None
 
 
 async def process_message(sidekick, message, success_criteria, history):
-    results = await sidekick.run_superstep(message, success_criteria, history)
-    return results, sidekick
+    if not sidekick:
+        error_msg = "Sidekick initialization failed. Please check if OPENAI_API_KEY is set."
+        return history + [{"role": "user", "content": message}, {"role": "assistant", "content": error_msg}], sidekick
+    
+    try:
+        results = await sidekick.run_superstep(message, success_criteria, history)
+        return results, sidekick
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        return history + [{"role": "user", "content": message}, {"role": "assistant", "content": error_msg}], sidekick
 
 
 async def reset():
-    new_sidekick = Sidekick()
-    await new_sidekick.setup()
-    return "", "", None, new_sidekick
+    try:
+        new_sidekick = Sidekick()
+        await new_sidekick.setup()
+        return "", "", None, new_sidekick
+    except Exception as e:
+        print(f"Error during reset: {e}")
+        return "", "", None, None
 
 
 def free_resources(sidekick):
@@ -33,7 +49,7 @@ with gr.Blocks(title="Sidekick", theme=gr.themes.Default(primary_hue="emerald"))
     sidekick = gr.State(delete_callback=free_resources)
 
     with gr.Row():
-        chatbot = gr.Chatbot(label="Sidekick", height=300, type="messages")
+        chatbot = gr.Chatbot(label="Sidekick", height=300, type="messages", allow_tags=False)
     with gr.Group():
         with gr.Row():
             message = gr.Textbox(show_label=False, placeholder="Your request to the Sidekick")
