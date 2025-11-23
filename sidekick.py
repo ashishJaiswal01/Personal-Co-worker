@@ -14,7 +14,7 @@ import uuid
 import asyncio
 from datetime import datetime
 
-load_dotenv(override=True)
+load_dotenv()
 
 
 class State(TypedDict):
