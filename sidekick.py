@@ -57,10 +57,15 @@ class Sidekick:
         self.playwright = None
 
     async def setup(self):
-        self.tools, self.browser, self.playwright = await playwright_tools()
+        playwright_tools_list, self.browser, self.playwright = await playwright_tools()
+        self.tools = playwright_tools_list  # Initialize with playwright tools (may be empty list)
         self.tools += await other_tools()
+        
+        if not self.tools:
+            print("Warning: No tools available. Using fallback mode with LLM only.")
+        
         worker_llm = ChatOpenAI(model="gpt-4o-mini")
-        self.worker_llm_with_tools = worker_llm.bind_tools(self.tools)
+        self.worker_llm_with_tools = worker_llm.bind_tools(self.tools) if self.tools else worker_llm
         evaluator_llm = ChatOpenAI(model="gpt-4o-mini")
         self.evaluator_llm_with_output = evaluator_llm.with_structured_output(EvaluatorOutput)
         await self.build_graph()

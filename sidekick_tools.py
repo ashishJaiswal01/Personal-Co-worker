@@ -25,10 +25,23 @@ else:
     print("Warning: SERPER_API_KEY not set. Google search tool will not be available.")
 
 async def playwright_tools():
-    playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(headless=True)
-    toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=browser)
-    return toolkit.get_tools(), browser, playwright
+    import asyncio
+    try:
+        # Add a timeout to prevent hanging in headless environments
+        playwright = await asyncio.wait_for(async_playwright().start(), timeout=30)
+        browser = await asyncio.wait_for(
+            playwright.chromium.launch(headless=True),
+            timeout=30
+        )
+        toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=browser)
+        return toolkit.get_tools(), browser, playwright
+    except asyncio.TimeoutError:
+        print("Warning: Playwright initialization timed out. Browser tools will not be available.")
+        # Return empty tools list so app can continue without browser
+        return [], None, None
+    except Exception as e:
+        print(f"Warning: Failed to initialize Playwright: {e}. Browser tools will not be available.")
+        return [], None, None
 
 
 def push(text: str):
