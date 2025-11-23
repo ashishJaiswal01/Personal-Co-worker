@@ -13,8 +13,19 @@ from sidekick_tools import playwright_tools, other_tools
 import uuid
 import asyncio
 from datetime import datetime
+import os
+import sys
 
 load_dotenv()
+
+
+# DEBUG: Print environment status to Render Logs
+key = os.environ.get("OPENAI_API_KEY")
+if not key:
+    print("❌ CRITICAL: OPENAI_API_KEY is Missing!", file=sys.stderr)
+else:
+    # Print first 5 chars only to prove it exists safely
+    print(f"✅ SUCCESS: OPENAI_API_KEY found starting with: {key[:5]}...", file=sys.stderr)
 
 
 class State(TypedDict):
