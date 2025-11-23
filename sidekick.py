@@ -106,13 +106,18 @@ class Sidekick:
         if not found_system_message:
             messages = [SystemMessage(content=system_message)] + messages
 
-        # Invoke the LLM with tools
-        response = self.worker_llm_with_tools.invoke(messages)
-
-        # Return updated state
-        return {
-            "messages": [response],
-        }
+        # Invoke the LLM with tools (guard against connection/network errors)
+        try:
+            response = self.worker_llm_with_tools.invoke(messages)
+            return {"messages": [response]}
+        except Exception as e:
+            # Log and return a safe assistant message indicating the error
+            print(f"Worker LLM error: {e}")
+            return {
+                "messages": [
+                    AIMessage(content=f"Error: Connection error while contacting LLM: {e}")
+                ]
+            }
 
     def worker_router(self, state: State) -> str:
         last_message = state["messages"][-1]
@@ -166,19 +171,31 @@ class Sidekick:
             HumanMessage(content=user_message),
         ]
 
-        eval_result = self.evaluator_llm_with_output.invoke(evaluator_messages)
-        new_state = {
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": f"Evaluator Feedback on this answer: {eval_result.feedback}",
-                }
-            ],
-            "feedback_on_work": eval_result.feedback,
-            "success_criteria_met": eval_result.success_criteria_met,
-            "user_input_needed": eval_result.user_input_needed,
-        }
-        return new_state
+        try:
+            eval_result = self.evaluator_llm_with_output.invoke(evaluator_messages)
+            new_state = {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": f"Evaluator Feedback on this answer: {eval_result.feedback}",
+                    }
+                ],
+                "feedback_on_work": eval_result.feedback,
+                "success_criteria_met": eval_result.success_criteria_met,
+                "user_input_needed": eval_result.user_input_needed,
+            }
+            return new_state
+        except Exception as e:
+            print(f"Evaluator LLM error: {e}")
+            # Return a state indicating evaluation couldn't be completed
+            return {
+                "messages": [
+                    {"role": "assistant", "content": f"Error: Connection error while evaluating: {e}"}
+                ],
+                "feedback_on_work": f"Evaluator failed: {e}",
+                "success_criteria_met": False,
+                "user_input_needed": True,
+            }
 
     def route_based_on_evaluation(self, state: State) -> str:
         if state["success_criteria_met"] or state["user_input_needed"]:
@@ -218,7 +235,14 @@ class Sidekick:
             "success_criteria_met": False,
             "user_input_needed": False,
         }
-        result = await self.graph.ainvoke(state, config=config)
+        try:
+            result = await self.graph.ainvoke(state, config=config)
+        except Exception as e:
+            print(f"Graph invocation error: {e}")
+            # Return a helpful error message to the user history
+            user = {"role": "user", "content": message}
+            return history + [user, {"role": "assistant", "content": f"Error: Connection error during processing: {e}"}]
+
         user = {"role": "user", "content": message}
         reply = {"role": "assistant", "content": result["messages"][-2].content}
         feedback = {"role": "assistant", "content": result["messages"][-1].content}
