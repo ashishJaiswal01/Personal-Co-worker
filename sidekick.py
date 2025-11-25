@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from typing import List, Any, Optional, Dict
+import time
 from pydantic import BaseModel, Field
 from sidekick_tools import playwright_tools, other_tools
 import uuid
@@ -70,6 +71,31 @@ class Sidekick:
         self.evaluator_llm_with_output = evaluator_llm.with_structured_output(EvaluatorOutput)
         await self.build_graph()
 
+    async def aclose(self):
+        """Asynchronously close browser and playwright if they exist."""
+        if self.browser:
+            try:
+                await self.browser.close()
+            except Exception as e:
+                print(f"Warning closing browser: {e}")
+            finally:
+                self.browser = None
+
+        if self.playwright:
+            try:
+                await self.playwright.stop()
+            except Exception as e:
+                print(f"Warning stopping playwright: {e}")
+            finally:
+                self.playwright = None
+
+    async def __aenter__(self):
+        await self.setup()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.aclose()
+
     def worker(self, state: State) -> Dict[str, Any]:
         system_message = f"""You are a helpful assistant that can use tools to complete tasks.
     You keep working on a task until either you have a question or clarification for the user, or the success criteria is met.
@@ -106,18 +132,28 @@ class Sidekick:
         if not found_system_message:
             messages = [SystemMessage(content=system_message)] + messages
 
-        # Invoke the LLM with tools (guard against connection/network errors)
-        try:
-            response = self.worker_llm_with_tools.invoke(messages)
-            return {"messages": [response]}
-        except Exception as e:
-            # Log and return a safe assistant message indicating the error
-            print(f"Worker LLM error: {e}")
-            return {
-                "messages": [
-                    AIMessage(content=f"Error: Connection error while contacting LLM: {e}")
-                ]
-            }
+        # Invoke the LLM with tools with simple retry logic for transient errors
+        max_attempts = 3
+        delay = 1
+        last_exc = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self.worker_llm_with_tools.invoke(messages)
+                return {"messages": [response]}
+            except Exception as e:
+                last_exc = e
+                print(f"Worker LLM attempt {attempt} failed: {e}")
+                if attempt < max_attempts:
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    # Final failure: return a helpful assistant message
+                    print(f"Worker LLM final failure after {max_attempts} attempts: {e}")
+                    return {
+                        "messages": [
+                            AIMessage(content=f"Error: Connection error while contacting LLM: {e}")
+                        ]
+                    }
 
     def worker_router(self, state: State) -> str:
         last_message = state["messages"][-1]
@@ -171,31 +207,39 @@ class Sidekick:
             HumanMessage(content=user_message),
         ]
 
-        try:
-            eval_result = self.evaluator_llm_with_output.invoke(evaluator_messages)
-            new_state = {
-                "messages": [
-                    {
-                        "role": "assistant",
-                        "content": f"Evaluator Feedback on this answer: {eval_result.feedback}",
+        # Retry evaluator invocation similarly
+        max_attempts = 3
+        delay = 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                eval_result = self.evaluator_llm_with_output.invoke(evaluator_messages)
+                new_state = {
+                    "messages": [
+                        {
+                            "role": "assistant",
+                            "content": f"Evaluator Feedback on this answer: {eval_result.feedback}",
+                        }
+                    ],
+                    "feedback_on_work": eval_result.feedback,
+                    "success_criteria_met": eval_result.success_criteria_met,
+                    "user_input_needed": eval_result.user_input_needed,
+                }
+                return new_state
+            except Exception as e:
+                print(f"Evaluator LLM attempt {attempt} failed: {e}")
+                if attempt < max_attempts:
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    print(f"Evaluator LLM final failure after {max_attempts} attempts: {e}")
+                    return {
+                        "messages": [
+                            {"role": "assistant", "content": f"Error: Connection error while evaluating: {e}"}
+                        ],
+                        "feedback_on_work": f"Evaluator failed: {e}",
+                        "success_criteria_met": False,
+                        "user_input_needed": True,
                     }
-                ],
-                "feedback_on_work": eval_result.feedback,
-                "success_criteria_met": eval_result.success_criteria_met,
-                "user_input_needed": eval_result.user_input_needed,
-            }
-            return new_state
-        except Exception as e:
-            print(f"Evaluator LLM error: {e}")
-            # Return a state indicating evaluation couldn't be completed
-            return {
-                "messages": [
-                    {"role": "assistant", "content": f"Error: Connection error while evaluating: {e}"}
-                ],
-                "feedback_on_work": f"Evaluator failed: {e}",
-                "success_criteria_met": False,
-                "user_input_needed": True,
-            }
 
     def route_based_on_evaluation(self, state: State) -> str:
         if state["success_criteria_met"] or state["user_input_needed"]:
@@ -235,13 +279,23 @@ class Sidekick:
             "success_criteria_met": False,
             "user_input_needed": False,
         }
-        try:
-            result = await self.graph.ainvoke(state, config=config)
-        except Exception as e:
-            print(f"Graph invocation error: {e}")
-            # Return a helpful error message to the user history
-            user = {"role": "user", "content": message}
-            return history + [user, {"role": "assistant", "content": f"Error: Connection error during processing: {e}"}]
+        # Retry graph invocation a few times to tolerate transient errors
+        max_attempts = 3
+        delay = 1
+        result = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = await self.graph.ainvoke(state, config=config)
+                break
+            except Exception as e:
+                print(f"Graph invocation attempt {attempt} failed: {e}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                else:
+                    print(f"Graph invocation final failure after {max_attempts} attempts: {e}")
+                    user = {"role": "user", "content": message}
+                    return history + [user, {"role": "assistant", "content": f"Error: Connection error during processing: {e}"}]
 
         user = {"role": "user", "content": message}
         reply = {"role": "assistant", "content": result["messages"][-2].content}
@@ -249,14 +303,15 @@ class Sidekick:
         return history + [user, reply, feedback]
 
     def cleanup(self):
-        if self.browser:
+        # Prefer to close async resources in the running loop if available.
+        if self.browser or self.playwright:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.browser.close())
-                if self.playwright:
-                    loop.create_task(self.playwright.stop())
+                # Schedule async close; caller should ensure loop stays alive until tasks finish.
+                loop.create_task(self.aclose())
             except RuntimeError:
-                # If no loop is running, do a direct run
-                asyncio.run(self.browser.close())
-                if self.playwright:
-                    asyncio.run(self.playwright.stop())
+                # No running loop; run the async closer synchronously.
+                try:
+                    asyncio.run(self.aclose())
+                except Exception as e:
+                    print(f"Exception while cleaning up Sidekick resources: {e}")
